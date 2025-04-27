@@ -1,6 +1,8 @@
 # Use the official lightweight Python image.
 # https://hub.docker.com/_/python
 # Allow statements and log messages to immediately appear in the Knative logs
+FROM python:3.12-slim
+
 ENV PYTHONUNBUFFERED True
 
 # Copy local code to the container image.
