@@ -6,13 +6,155 @@
 
 import os
 
-from flask import Flask
+from flask import Flask, request
+from google.cloud.datastore.query import PropertyFilter
 
 app = Flask(__name__)
 
+from google.cloud import datastore
+
+datastore_client = datastore.Client()
+
+
+@app.route("/set", methods=["GET"])
+def set():
+    params = request.args.to_dict()
+    name = params.get('name')
+    value = params.get('value')
+    prev_value = set_operation(name, value)
+    stack_operation_key = datastore_client.key('stack_operation')
+    stack_operation_entity = datastore_client.entity(key=stack_operation_key)
+    stack_operation_entity['name'] = name
+    stack_operation_entity['prev_value'] = prev_value
+    stack_operation_entity['name_operation'] = 'set'
+    stack_operation_entity['undo_true'] = '0'
+    if prev_value is None:
+        stack_operation_entity['name_operation'] = 'unset'
+    datastore_client.put(entity=stack_operation_entity)
+    return '{}={}'.format(name, value), 200
+
+
+def set_operation(name, value):
+    main_key = datastore_client.key('list_variable')
+    list_entity = list(datastore_client.query(kind='list_variable').fetch())
+    entity = datastore.Entity(key=main_key)
+    prev_value = None
+    if len(list_entity) > 0:
+        ret_list = list(
+            datastore_client.query(kind='list_variable').add_filter(filter=PropertyFilter('name', '=', name)).fetch())
+        if len(ret_list) > 0:
+            entity = ret_list[0]
+    if value is not None:
+        prev_value = entity.get('value')
+        entity['value'] = value
+        entity['name'] = name
+    datastore_client.put(entity)
+    return prev_value
+
+
+@app.route("/get", methods=["GET"])
+def get():
+    params = request.args.to_dict()
+    name = params.get('name')
+    entity_list = list(
+        datastore_client.query(kind='list_variable').add_filter(filter=PropertyFilter('name', '=', name)).fetch())
+    if len(entity_list) > 0:
+        value = entity_list[0]['value']
+    else:
+        value = 'None'
+    return '{}={}'.format(name, value), 200
+
+
+@app.route("/numequalto", methods=["GET"])
+def numequalto():
+    params = request.args.to_dict()
+    value = params.get('value')
+    query = datastore_client.query(kind='list_variable')
+    query_filter = query.add_filter(filter=PropertyFilter('value', '=', value))
+    res = list(query_filter.fetch())
+    return 'count of variables with value {} is {}'.format(value, len(res)), 200
+
+
+@app.route("/unset", methods=["GET"])
+def unset():
+    params = request.args.to_dict()
+    name = params.get('name')
+    prev_value = unset_operation(name)
+    if prev_value is not None:
+        stack_operation_key = datastore_client.key('stack_operation')
+        stack_operation_entity = datastore_client.entity(key=stack_operation_key)
+        stack_operation_entity['name'] = name
+        stack_operation_entity['prev_value'] = prev_value
+        stack_operation_entity['name_operation'] = 'set'
+        stack_operation_entity['undo_true'] = '0'
+        datastore_client.put(entity=stack_operation_entity)
+    return '{} = None'.format(name), 200
+
+
+def unset_operation(name):
+    query = datastore_client.query(kind='list_variable')
+    query_filter = query.add_filter(filter=PropertyFilter('name', '=', name))
+    list_res = list(query_filter.fetch())
+    prev_value = None
+    if len(list_res) > 0:
+        entity = list(query_filter.fetch())[0]
+        prev_value = entity['value']
+        datastore_client.delete(key=entity.key)
+    return prev_value
+
+
+@app.route("/end")
+def end():
+    all_entities = list(datastore_client.query(kind='list_variable').fetch())
+    for entity in all_entities:
+        datastore_client.delete(key=entity.key)
+    all_entities = list(datastore_client.query(kind='stack_operation').fetch())
+    for entity in all_entities:
+        datastore_client.delete(key=entity.key)
+    return 'CLEANED', 200
+
+
+@app.route("/undo")
+def undo():
+    all_entities = list(datastore_client.query(kind='stack_operation'). \
+                        add_filter(filter=PropertyFilter('undo_true', '=', '0')).fetch())
+    if len(all_entities) > 0:
+        last_operation = all_entities[len(all_entities) - 1]
+        operation = last_operation['name_operation']
+        prev_value = last_operation['prev_value']
+        name = last_operation['name']
+        if operation == 'set':
+            new_prev_value = set_operation(name, prev_value)
+            last_operation['prev_value'] = new_prev_value
+        if operation == 'unset':
+            new_prev_value = unset_operation(name)
+            last_operation['prev_value'] = new_prev_value
+            last_operation['name_operation'] = 'set'
+        last_operation['undo_true'] = '1'
+        datastore_client.put(entity=last_operation)
+
+@app.route("/redo")
+def redo():
+    all_entities = list(datastore_client.query(kind='stack_operation'). \
+                        add_filter(filter=PropertyFilter('undo_true', '=', '1')).fetch())
+    if len(all_entities) > 0:
+        last_operation = all_entities[len(all_entities) - 1]
+        operation = last_operation['name_operation']
+        prev_value = last_operation['prev_value']
+        name = last_operation['name']
+        if operation == 'set':
+            new_prev_value = set_operation(name, prev_value)
+            last_operation['prev_value'] = new_prev_value
+        if operation == 'unset':
+            new_prev_value = unset_operation(name)
+            last_operation['prev_value'] = new_prev_value
+            last_operation['name_operation'] = 'set'
+        last_operation['undo_true'] = '0'
+        datastore_client.put(entity=last_operation)
+
 
 @app.route("/")
-def hello_world():
+def root():
     """Example Hello World route."""
     name = os.environ.get("NAME", "World")
     return f"Hello {name}!"
