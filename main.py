@@ -8,10 +8,10 @@ import os
 
 from flask import Flask, request
 from google.cloud.datastore.query import PropertyFilter
+from google.cloud import datastore
 
 app = Flask(__name__)
 
-from google.cloud import datastore
 
 datastore_client = datastore.Client()
 
