@@ -1,0 +1,6 @@
+indexes:
+
+- kind: stack_operation
+  properties:
+  - name: undo_true
+  - name: timestamp
